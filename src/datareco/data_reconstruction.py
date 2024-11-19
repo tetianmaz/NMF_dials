@@ -30,7 +30,8 @@ class DataReconstruction:
         area_percentages = [(area / total_areas) * 100 for area in areas]
         return area_percentages
 
-    def plot_trend(self, df, title="Component Contribution Trend", components="all", mode="area"):
+    def plot_trend(self, df, title="Component Contribution Trend", components="all", mode="area", 
+               stats_from=None):
         """
         Plot trend of component contributions over lumisections by area or coefficient.
         """
@@ -43,12 +44,32 @@ class DataReconstruction:
         
         ylabel = "Area Contribution (%)" if mode == "area" else "Coefficient Contribution (%)"
 
+        stats_df_current = self.statistics_for_plot_trends(df)
+        stats_df_combined = self.statistics_for_plot_trends(stats_from) if stats_from is not None else None
+
+        current_data_label = "Train Data" if stats_from is None else "Test Data"
+        additional_data_label = "Train Data" if stats_from is not None else None
+
         ls_values = df['LS'].values
         extended_ls_values = np.append(ls_values, ls_values[-1] + 1)
 
         for column in columns_to_plot:
-            ax.stairs(df[column].values, extended_ls_values, label=column.replace('Component_', 'Component '), baseline=None)
+            component_stats_current = stats_df_current[stats_df_current["Component"] == column]
+            mean_current = component_stats_current["Mean"].values[0]
+            std_dev_current = component_stats_current["Std Dev"].values[0]
 
+            legend_label = f"{column.replace('Component_', 'Component ')}\n" \
+                       f"{current_data_label} Stats: (mean={mean_current:.3f}, std={std_dev_current:.3f})"
+
+            if stats_from is not None:
+                component_stats_combined = stats_df_combined[stats_df_combined["Component"] == column]
+                mean_combined = component_stats_combined["Mean"].values[0]
+                std_dev_combined = component_stats_combined["Std Dev"].values[0]
+
+                legend_label += f"\n{additional_data_label} Stats: (mean={mean_combined:.3f}, std={std_dev_combined:.3f})"
+        
+            ax.stairs(df[column].values, extended_ls_values, label=legend_label, baseline=None)
+            
         ax.set_xlim(left=1)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True, prune='both', nbins='auto'))
         
@@ -60,8 +81,33 @@ class DataReconstruction:
         ax.set_title(f"{title} ({mode.capitalize()} Mode)")
         ax.set_xlabel("Lumisection")
         ax.set_ylabel(ylabel)
-        ax.legend()
+        ax.legend(loc="upper left", bbox_to_anchor=(1.05, 1), fontsize="large") 
+        plt.tight_layout()
         plt.show()
+  
+    def detect_outliers(self, df, stats_from=None):
+        """
+        Detect LSs where any component's value is outside the mean ± 2*std range.
+        """
+        stats_df = self.statistics_for_plot_trends(stats_from if stats_from is not None else df)
+    
+        outliers_data = {"LS": df["LS"].values}
+
+        for component in df.columns[1:]:  
+            mean_value = stats_df.loc[stats_df["Component"] == component, "Mean"].values[0]
+            std_dev_value = stats_df.loc[stats_df["Component"] == component, "Std Dev"].values[0]
+
+            lower_bound = mean_value - 2 * std_dev_value
+            upper_bound = mean_value + 2 * std_dev_value
+
+            outliers_data[component] = (df[component] < lower_bound) | (df[component] > upper_bound)
+
+        outliers_df = pd.DataFrame(outliers_data)
+
+        outliers_df = outliers_df[outliers_df.iloc[:, 1:].any(axis=1)].reset_index(drop=True)
+
+        return outliers_df
+
 
     def collect_contributions(self, W, H, dense_matrix, num_ls, data_type="train", mode="area"):
         """
@@ -89,6 +135,21 @@ class DataReconstruction:
                 contribution_data[f"Component_{idx+1}"].append(contrib)
 
         return pd.DataFrame(contribution_data)
+    
+    def statistics_for_plot_trends(self, df):
+        """
+        Mean and std for trend plots.
+        """
+        means = df.loc[:, df.columns != "LS"].mean()  
+        std_devs = df.loc[:, df.columns != "LS"].std()  
+
+        stats_df = pd.DataFrame({
+            "Component": means.index,
+            "Mean": means.values,
+            "Std Dev": std_devs.values
+        })
+
+        return stats_df
         
     def print_component_contributions(self, ls, W, mode="train"):
         """
@@ -107,7 +168,7 @@ class DataReconstruction:
 
     def plot_reconstruction(self, ls_train, ls_test=None):
         """
-        Plot reconstruction and component contributions for a given lumisection using stairs plot with area and coefficient contributions.
+        Plot reconstruction and component contributions for a given lumisection with area and coefficient contributions.
         """
         fig, axs = plt.subplots(1, 2, figsize=(16, 7)) 
 
@@ -153,7 +214,7 @@ class DataReconstruction:
             
     def plot_all_components(self, variable_name='H'):
         """
-        Plots each component in matrix H on a single plot using stairs with specified x_min and x_max values.
+        Plots each component in matrix H.
         """
         n_components, n_features = self.H.shape
         x_values = np.linspace(self.x_min, self.x_max, n_features + 1)
@@ -169,3 +230,4 @@ class DataReconstruction:
         plt.legend(loc='upper right')
         plt.tight_layout()
         plt.show()
+        
